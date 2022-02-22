@@ -1,0 +1,251 @@
+#Brandon Munroe
+#CSCI 523
+#SP22
+#Assignment 2
+
+#Requirement: Load in a data set and predict if the strings relates to JavaScript, Java, Python, or CSharp
+
+#Code
+
+import matplotlib.pyplot as plt
+import os
+import re
+import shutil
+import string
+import tensorflow as tf
+
+from tensorflow.keras import layers
+from tensorflow.keras import losses
+
+
+import collections
+import pathlib
+
+from tensorflow.keras import utils
+from tensorflow.keras.layers import TextVectorization
+
+
+print(tf.__version__)
+
+url = "https://storage.googleapis.com/download.tensorflow.org/data/stack_overflow_16k.tar.gz"
+
+dataset = tf.keras.utils.get_file("stack_overflow_16k", url,
+                                    untar=True, cache_dir='.',
+                                    cache_subdir='')
+
+dataset_dir = os.path.join(os.path.dirname(dataset), 'stack_overflow_16k')
+
+os.listdir(dataset_dir) #folders/files in the downloaded dataset
+
+train_dir = os.path.join(dataset_dir, 'train')
+os.listdir(train_dir)  #folders/files in the train folder dataset
+
+batch_size = 32 #amount of stack over flow comments to retrieve from the dataset to test aka the text batch
+seed = 42
+
+raw_train_ds = tf.keras.utils.text_dataset_from_directory(
+    'stack_overflow_16k/train', 
+    batch_size=batch_size, 
+    validation_split=0.2,  #used 20% of the entire dataset for validation test
+    subset='training', 
+    seed=seed)
+
+for text_batch, label_batch in raw_train_ds.take(1):
+  for i in range(3):
+    print("Question: ", text_batch.numpy()[i])
+    print("Label:", label_batch.numpy()[i])
+
+for i, label in enumerate(raw_train_ds.class_names):
+  print("Label", i, "corresponds to", label)
+
+raw_val_ds = tf.keras.utils.text_dataset_from_directory(   #validation batch
+    'stack_overflow_16k/train', 
+    batch_size=batch_size, 
+    validation_split=0.2, 
+    subset='validation', 
+    seed=seed)
+
+raw_test_ds = tf.keras.utils.text_dataset_from_directory( #batch used to test the algorithm
+    'stack_overflow_16k/test', 
+    batch_size=batch_size)
+
+def custom_standardization(input_data): #function used to clean and standardize dataset. Remove noise in dataset
+  lowercase = tf.strings.lower(input_data)
+  stripped_html = tf.strings.regex_replace(lowercase, '<br />', ' ')
+  return tf.strings.regex_replace(stripped_html,
+                                  '[%s]' % re.escape(string.punctuation),
+                                  '')
+
+VOCAB_SIZE = 10000 #max amount of words to create. Max amount of tokens
+
+binary_vectorize_layer = TextVectorization(
+    max_tokens=VOCAB_SIZE,
+    output_mode='binary')
+
+MAX_SEQUENCE_LENGTH = 250  # will cause the layer to pad or truncate sequences to exactly 250
+
+int_vectorize_layer = TextVectorization(
+    max_tokens=VOCAB_SIZE,
+    output_mode='int',
+    output_sequence_length=MAX_SEQUENCE_LENGTH)
+
+# Make a text-only dataset (without labels), then call adapt
+train_text = raw_train_ds.map(lambda x, y: x) # 'x' is the varible for text
+binary_vectorize_layer.adapt(train_text)
+int_vectorize_layer.adapt(train_text)
+
+def binary_vectorize_text(text, label):
+  text = tf.expand_dims(text, -1)
+  return binary_vectorize_layer(text), label
+
+def int_vectorize_text(text, label):
+  text = tf.expand_dims(text, -1)
+  return int_vectorize_layer(text), label
+
+text_batch, label_batch = next(iter(raw_train_ds)) #randomly chosen interations out of the raw_train_ds dataset batch
+first_question, first_label = text_batch[0], label_batch[0] #randomly chosen tokens for each variable
+print("Question", first_question)
+print("Program", raw_train_ds.class_names[first_label])
+
+
+print("1287 ---> ",int_vectorize_layer .get_vocabulary()[55]) #vocabulary token created with index number
+print("1287 ---> ",int_vectorize_layer .get_vocabulary()[6]) #vocabulary token created with index number
+print("1287 ---> ",int_vectorize_layer .get_vocabulary()[2]) #vocabulary token created with index number
+print(" 313 ---> ",int_vectorize_layer .get_vocabulary()[410]) #vocabulary token created with index number
+print("1287 ---> ",int_vectorize_layer .get_vocabulary()[211]) #vocabulary token created with index number
+print("1287 ---> ",int_vectorize_layer .get_vocabulary()[229]) #vocabulary token created with index number
+
+print('Vocabulary size: {}'.format(len(int_vectorize_layer .get_vocabulary()))) #size of vocbulary
+
+print("'binary' vectorized question:", #The random interation converts words into binary code https://medium.com/@paritosh_30025/natural-language-processing-text-data-vectorization-af2520529cf7
+      binary_vectorize_text(first_question, first_label)[0])
+print("'int' vectorized question:",# see previous code as an example. Using various integers to define specific words out of a 10000 size vocabulary
+      int_vectorize_text(first_question, first_label)[0])
+
+binary_train_ds = raw_train_ds.map(binary_vectorize_text)
+binary_val_ds = raw_val_ds.map(binary_vectorize_text)
+binary_test_ds = raw_test_ds.map(binary_vectorize_text)
+
+int_train_ds = raw_train_ds.map(int_vectorize_text)
+int_val_ds = raw_val_ds.map(int_vectorize_text)
+int_test_ds = raw_test_ds.map(int_vectorize_text)
+
+AUTOTUNE = tf.data.AUTOTUNE
+
+binary_train_ds = binary_train_ds.cache().prefetch(buffer_size=AUTOTUNE)
+binary_val_ds = binary_val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+binary_test_ds = binary_test_ds.cache().prefetch(buffer_size=AUTOTUNE)
+
+int_train_ds = int_train_ds.cache().prefetch(buffer_size=AUTOTUNE)
+int_val_ds = int_val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+int_test_ds = int_test_ds.cache().prefetch(buffer_size=AUTOTUNE)
+
+binary_model = tf.keras.Sequential([layers.Dense(4)]) #creates the neural network using the bag of words vectorization. The more you training (epochs) the model the better the result. 
+
+binary_model.compile(loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              optimizer='adam',
+              metrics=['accuracy'])
+
+binary_history = binary_model.fit(
+    binary_train_ds,
+    validation_data=binary_val_ds,
+    epochs=10)
+
+
+binary_model.summary()
+
+int_model = tf.keras.Sequential([
+      layers.Embedding(10000, 64, mask_zero=True),
+      layers.Conv1D(64, 5, padding="valid", activation="relu", strides=2), #layers.Conv1D(filter, width, padding, activation, horizontal strides) https://peltarion.com/knowledge-center/documentation/modeling-view/build-an-ai-model/blocks/1d-convolution
+      layers.GlobalMaxPooling1D(),
+      layers.Dense(4)])
+
+int_model.compile(
+    loss=losses.SparseCategoricalCrossentropy(from_logits=True),
+    optimizer='adam',
+    metrics=['accuracy'])
+
+int_history = int_model.fit(int_train_ds, validation_data=int_val_ds, epochs=5)
+
+int_model.summary()
+
+binary_loss, binary_accuracy = binary_model.evaluate(binary_test_ds)
+
+print("Loss: ", binary_loss)
+print("Accuracy: ", binary_accuracy)
+
+int_loss, int_accuracy = int_model.evaluate(int_test_ds)
+
+print("Loss: ", int_loss)
+print("Accuracy: ", int_accuracy)
+
+#Binary vectorization (bag of words) is more accurate than the integer vectorization (1D ConvNet) in this case. So I chose to use the binary vectorization
+
+history_dict = binary_history.history
+history_dict.keys()
+
+acc = history_dict['accuracy']
+val_acc = history_dict['val_accuracy']
+loss = history_dict['loss']
+val_loss = history_dict['val_loss']
+
+epochs = range(1, len(acc) + 1)
+
+# "o" is for "dot"
+plt.plot(epochs,loss, 'o' , label='Training loss',color='green')
+# c is for "solid line"
+plt.plot(epochs, val_loss, 'c', label='Validation loss',color='red')
+plt.title('Training and validation loss for Binary')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.show()
+
+plt.plot(epochs, acc, 'o', label='Training acc',color='green')
+plt.plot(epochs, val_acc, 'c', label='Validation acc',color='green')
+plt.title('Training and validation accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(loc='lower right')
+
+plt.show()
+
+export_model = tf.keras.Sequential([
+  binary_vectorize_layer,
+  binary_model,
+  layers.Activation('sigmoid')
+])
+
+export_model.compile(
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False), optimizer="adam", metrics=['accuracy']
+)
+
+# Test it with `raw_test_ds`, which yields raw strings
+loss, accuracy = export_model.evaluate(raw_test_ds)
+print(binary_accuracy)
+
+inputs = [
+    "debug public static void main(string[] args) {...}",  # 'python'
+]
+def get_string_labels(predicted_scores_batch):
+  predicted_int_labels = tf.argmax(predicted_scores_batch, axis=1)
+  predicted_labels = tf.gather(raw_train_ds.class_names, predicted_int_labels)
+  return predicted_labels
+
+
+
+predicted_scores = export_model.predict(inputs)
+predicted_labels = get_string_labels(predicted_scores)
+
+for input, label in zip(inputs, predicted_labels):
+
+  print("Question: ", inputs)
+  print(predicted_scores)
+  print("Predicted label: ", label.numpy())
+
+  
+#Label/Index 0 of the predicted scores array corresponds to csharp
+#Label/Index 1 of the predicted scores array corresponds to java
+#Label/Index 2 of the predicted scores array corresponds to javascript
+#Label/Index 3 of the predicted scores array corresponds to python
